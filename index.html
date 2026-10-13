@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Descifrador Encipher.it EnCt2</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#182230;background:#f2f5f9}
+body{max-width:900px;margin:32px auto;padding:0 16px}
+main{background:#fff;border:1px solid #dbe2ea;border-radius:14px;padding:clamp(18px,4vw,30px);box-shadow:0 8px 28px #10203012}
+h1{font-size:clamp(1.4rem,4vw,2rem);margin-top:0}
+p{line-height:1.5}
+label{display:block;font-weight:650;margin:18px 0 7px}
+textarea,input[type=password],input[type=file]{box-sizing:border-box;width:100%;padding:12px;border:1px solid #bac5d1;border-radius:8px;background:white;font:inherit}
+textarea{min-height:155px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9rem;overflow-wrap:anywhere}
+button{margin-top:18px;padding:12px 18px;border:0;border-radius:8px;background:#145da0;color:#fff;font-weight:700;font-size:1rem;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+#status{margin-top:16px;padding:12px;border-radius:8px;white-space:pre-wrap}
+.ok{background:#e8f7ec;color:#14532d}.err{background:#fff0f0;color:#8b1e1e}.info{background:#eef5ff;color:#1e3a8a}
+.note{font-size:.9rem;color:#526173}
+</style>
+</head>
+<body>
+<main>
+<h1>Descifrador Encipher.it (formato EnCt2)</h1>
+<p>Herramienta educativa para el laboratorio de redes y ciberseguridad. El descifrado se realiza localmente en este navegador; el contenido no se envía a un servidor.</p>
+
+<label for="file">1. Seleccione el archivo ftplogin.txt (opcional)</label>
+<input id="file" type="file" accept=".txt,text/plain">
+
+<label for="cipher">2. Texto cifrado</label>
+<textarea id="cipher" spellcheck="false" placeholder="Pegue aquí todo el contenido, desde EnCt2 hasta IwEmS. Se permiten saltos de línea."></textarea>
+
+<label for="password">3. Contraseña de descifrado</label>
+<input id="password" type="password" autocomplete="off" placeholder="Introduzca la contraseña">
+
+<button id="decrypt" type="button">Descifrar</button>
+<div id="status" role="status" aria-live="polite" class="info">Listo. Seleccione el archivo o pegue el texto cifrado.</div>
+
+<label for="result">Resultado descifrado</label>
+<textarea id="result" readonly placeholder="El texto descifrado aparecerá aquí."></textarea>
+<button id="copy" type="button">Copiar resultado</button>
+<p class="note">Aviso: úselo únicamente con archivos de prácticas autorizadas. No introduzca contraseñas personales.</p>
+</main>
+
+<script>
+"use strict";
+const enc = new TextEncoder();
+const dec = new TextDecoder("utf-8", {fatal:true});
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, b => b.toString(16).padStart(2,"0")).join("");
+}
+function equalBytes(a,b) {
+  if (a.length !== b.length) return false;
+  let x = 0;
+  for (let i=0;i<a.length;i++) x |= a[i] ^ b[i];
+  return x === 0;
+}
+function decodeBase64(text) {
+  const clean = text.replace(/\s+/g,"");
+  const binary = atob(clean);
+  return Uint8Array.from(binary, ch => ch.charCodeAt(0));
+}
+function concatBytes(...parts) {
+  const out = new Uint8Array(parts.reduce((n,p)=>n+p.length,0));
+  let offset=0;
+  for(const part of parts){out.set(part,offset);offset+=part.length;}
+  return out;
+}
+async function derivePBKDF2(password,salt) {
+  const baseKey = await crypto.subtle.importKey(
+    "raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]
+  );
+  return new Uint8Array(await crypto.subtle.deriveBits({
+    name:"PBKDF2", salt, iterations:1000, hash:"SHA-1"
+  }, baseKey, 256));
+}
+async function hmacSha1(keyBytes,data) {
+  const key = await crypto.subtle.importKey(
+    "raw", keyBytes, {name:"HMAC",hash:"SHA-1"}, false, ["sign"]
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC",key,data));
+}
+
+/*
+ * Formato histórico EnCt2:
+ * EnCt2 + HMAC-SHA1 en hexadecimal (40 caracteres)
+ * + los primeros 24 caracteres del HMAC
+ * + salt Base64 de 8 caracteres
+ * + Base64(nonce de 8 bytes || ciphertext)
+ * + IwEmS
+ *
+ * PBKDF2-HMAC-SHA1, 1000 iteraciones; clave derivada de 32 bytes
+ * convertida a hexadecimal ASCII. La clave AES se deriva mediante
+ * AES-ECB; se obtiene el primer bloque usando AES-CBC con IV cero
+ * y se descarta el bloque de padding añadido por WebCrypto.
+ */
+async function decryptEnCt2(password, input) {
+  const text = input.replace(/\s+/g,"");
+  if (!text.startsWith("EnCt2") || !text.endsWith("IwEmS"))
+    throw new Error("Formato no válido: el texto debe empezar por EnCt2 y terminar por IwEmS.");
+
+  const body = text.slice(5,-5);
+  if (body.length < 80)
+    throw new Error("El texto cifrado está incompleto.");
+
+  const hmacHex = body.slice(0,40);
+  const hmacRepeat = body.slice(40,64);
+  const saltText = body.slice(64,72);
+  const payloadText = body.slice(72);
+
+  if (!/^[0-9a-f]{40}$/i.test(hmacHex))
+    throw new Error("El encabezado HMAC no tiene el formato esperado.");
+  if (hmacRepeat.toLowerCase() !== hmacHex.slice(0,24).toLowerCase())
+    throw new Error("El texto está incompleto o se alteró: no coincide el bloque de verificación.");
+  if (saltText.length !== 8)
+    throw new Error("No se encontró el salt de 8 caracteres.");
+
+  const payload = decodeBase64(payloadText);
+  if (payload.length < 9)
+    throw new Error("No hay suficientes datos cifrados.");
+
+  const nonce = payload.slice(0,8);
+  const ciphertext = payload.slice(8);
+  const salt = enc.encode(saltText);
+  const derived = await derivePBKDF2(password,salt);
+  const macKey = enc.encode(bytesToHex(derived)); // 64 ASCII bytes
+
+  // Encipher.it encrypts the first 16 ASCII bytes of macKey using
+  // AES with the first 32 ASCII bytes of macKey as the AES-128 key.
+  const aesEcbKey = await crypto.subtle.importKey(
+    "raw", macKey.slice(0,32), {name:"AES-CBC"}, false, ["encrypt"]
+  );
+  const firstBlock = await crypto.subtle.encrypt(
+    {name:"AES-CBC",iv:new Uint8Array(16)}, aesEcbKey, macKey.slice(0,16)
+  );
+  const aesKey = concatBytes(new Uint8Array(firstBlock).slice(0,16),
+                             new Uint8Array(firstBlock).slice(0,16));
+
+  const aesCtrKey = await crypto.subtle.importKey(
+    "raw", aesKey, {name:"AES-CTR"}, false, ["decrypt"]
+  );
+  const counter = concatBytes(nonce,new Uint8Array(8));
+  const plaintextBuffer = await crypto.subtle.decrypt(
+    {name:"AES-CTR",counter,length:128}, aesCtrKey, ciphertext
+  );
+  const plaintextBytes = new Uint8Array(plaintextBuffer);
+
+  const actualHmac = await hmacSha1(macKey,plaintextBytes);
+  const expectedHmac = Uint8Array.from(hmacHex.match(/../g),h=>parseInt(h,16));
+  if (!equalBytes(actualHmac,expectedHmac))
+    throw new Error("La contraseña no es correcta o el contenido está incompleto/alterado. Copie todo el texto original y vuelva a intentarlo.");
+
+  return dec.decode(plaintextBytes);
+}
+
+const fileInput=document.getElementById("file");
+const cipherInput=document.getElementById("cipher");
+const passwordInput=document.getElementById("password");
+const resultInput=document.getElementById("result");
+const statusBox=document.getElementById("status");
+const decryptButton=document.getElementById("decrypt");
+
+fileInput.addEventListener("change",async()=>{
+  const file=fileInput.files && fileInput.files[0];
+  if(!file)return;
+  cipherInput.value=await file.text();
+  statusBox.className="info";
+  statusBox.textContent="Archivo cargado. Introduzca la contraseña y pulse Descifrar.";
+});
+decryptButton.addEventListener("click",async()=>{
+  resultInput.value="";
+  statusBox.className="info";
+  if(!window.crypto || !crypto.subtle){
+    statusBox.className="err";
+    statusBox.textContent="Este navegador no habilita Web Crypto en esta ubicación. Abra el archivo en una versión actual de Chrome o Edge, o publíquelo en una dirección HTTPS.";
+    return;
+  }
+  if(!cipherInput.value.trim()){
+    statusBox.className="err";statusBox.textContent="Seleccione ftplogin.txt o pegue el texto cifrado.";return;
+  }
+  if(!passwordInput.value){
+    statusBox.className="err";statusBox.textContent="Introduzca la contraseña de descifrado.";return;
+  }
+  decryptButton.disabled=true;
+  decryptButton.textContent="Descifrando…";
+  try{
+    const plaintext=await decryptEnCt2(passwordInput.value,cipherInput.value);
+    resultInput.value=plaintext;
+    statusBox.className="ok";
+    statusBox.textContent="Descifrado correcto. La integridad del texto fue verificada.";
+  }catch(err){
+    statusBox.className="err";
+    statusBox.textContent="No se pudo descifrar: "+(err && err.message ? err.message : String(err));
+  }finally{
+    decryptButton.disabled=false;
+    decryptButton.textContent="Descifrar";
+  }
+});
+document.getElementById("copy").addEventListener("click",async()=>{
+  if(!resultInput.value){statusBox.className="err";statusBox.textContent="No hay resultado para copiar.";return;}
+  try{
+    await navigator.clipboard.writeText(resultInput.value);
+    statusBox.className="ok";statusBox.textContent="Resultado copiado.";
+  }catch(e){
+    resultInput.focus();resultInput.select();
+    statusBox.className="info";statusBox.textContent="Seleccione el texto del resultado y cópielo con Ctrl+C.";
+  }
+});
+</script>
+</body>
+</html>
