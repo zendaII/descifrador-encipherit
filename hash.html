@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verificador de Integridad de Hashes - Laboratorio</title>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #f0f2f5; margin: 0; padding: 2rem 1rem; display: flex; justify-content: center; }
+    .card { background: #fff; width: 100%; max-width: 650px; border-radius: 8px; padding: 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    h2 { margin-top: 0; color: #1f2937; font-size: 1.3rem; }
+    p { color: #4b5563; font-size: 0.9rem; line-height: 1.4; }
+    label { font-weight: 600; font-size: 0.85rem; color: #374151; display: block; margin-top: 1rem; margin-bottom: 0.3rem; }
+    textarea { width: 100%; height: 130px; border: 1px solid #d1d5db; border-radius: 6px; padding: 0.6rem; font-family: monospace; font-size: 0.85rem; resize: vertical; }
+    select, input[type="file"] { width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem; background: #fff; }
+    .btn { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 0.6rem 1.2rem; font-size: 0.95rem; font-weight: 600; cursor: pointer; margin-top: 1rem; width: 100%; transition: background 0.2s; }
+    .btn:hover { background: #1d4ed8; }
+    .output-box { margin-top: 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.8rem; word-break: break-all; }
+    .output-label { font-size: 0.8rem; color: #6b7280; font-weight: bold; }
+    .hash-val { font-family: monospace; font-size: 1rem; color: #111827; margin-top: 0.3rem; display: block; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>Verificador de Integridad de Archivos</h2>
+  <p>Herramienta para calcular el resumen criptográfico (Hash) de los archivos cliente del laboratorio Cisco.</p>
+
+  <label for="fileInput">Opción A: Cargar archivo (.txt directamente)</label>
+  <input type="file" id="fileInput">
+
+  <label for="textInput">Opción B: Pegar contenido del archivo</label>
+  <textarea id="textInput" placeholder="Pega aquí el texto copiado desde Mike's PC (ej. NEclients.txt)..."></textarea>
+
+  <label for="algoSelect">Algoritmo</label>
+  <select id="algoSelect">
+    <option value="md2" selected>MD2 (Requerido en la guía)</option>
+    <option value="sha256">SHA-256</option>
+  </select>
+
+  <button class="btn" onclick="generarHash()">Calcular Hash</button>
+
+  <div class="output-box" id="resultBox" style="display: none;">
+    <div class="output-label" id="resultLabel">HASH CALCULADO:</div>
+    <span class="hash-val" id="hashOutput"></span>
+  </div>
+</div>
+
+<script>
+  // Implementación nativa estándar de MD2 (RFC 1319)
+  const PI_SUBST = [
+    41, 46, 67, 201, 162, 216, 124, 1, 61, 54, 84, 161, 236, 240, 6, 19,
+    98, 167, 5, 243, 192, 199, 115, 140, 152, 147, 43, 217, 188, 76, 130, 202,
+    30, 155, 87, 60, 253, 212, 224, 22, 103, 66, 111, 24, 138, 23, 229, 18,
+    190, 78, 196, 214, 218, 158, 222, 73, 160, 251, 245, 142, 187, 47, 238, 122,
+    169, 104, 121, 145, 21, 178, 7, 63, 148, 194, 16, 137, 11, 34, 95, 33,
+    128, 127, 93, 154, 90, 144, 50, 39, 53, 62, 204, 231, 191, 247, 151, 3,
+    255, 25, 48, 179, 72, 165, 181, 209, 215, 94, 146, 42, 172, 86, 170, 198,
+    79, 184, 56, 210, 150, 164, 125, 182, 118, 252, 107, 226, 156, 116, 4, 241,
+    69, 157, 112, 89, 100, 113, 135, 32, 134, 91, 207, 101, 230, 45, 168, 2,
+    27, 96, 37, 173, 174, 176, 185, 246, 28, 70, 97, 105, 52, 64, 126, 15,
+    85, 71, 163, 35, 221, 81, 175, 58, 195, 92, 249, 206, 186, 197, 234, 38,
+    44, 83, 13, 110, 133, 40, 132, 9, 211, 223, 205, 244, 65, 129, 77, 82,
+    106, 220, 55, 200, 108, 193, 171, 250, 36, 225, 123, 8, 12, 189, 177, 74,
+    120, 136, 149, 139, 227, 99, 232, 109, 233, 203, 213, 254, 59, 0, 29, 57,
+    242, 239, 183, 14, 102, 88, 208, 228, 166, 119, 114, 248, 235, 117, 75, 10,
+    49, 68, 80, 180, 143, 237, 31, 26, 219, 153, 141, 51, 159, 17, 131, 20
+  ];
+
+  function calcMD2(bytes) {
+    const pad = 16 - (bytes.length % 16);
+    const m = new Uint8Array(bytes.length + pad + 16);
+    m.set(bytes);
+    for (let i = 0; i < pad; i++) m[bytes.length + i] = pad;
+
+    const nBlocks = (bytes.length + pad) / 16;
+    const c = new Uint8Array(16);
+    let l = 0;
+    for (let i = 0; i < nBlocks; i++) {
+      for (let j = 0; j < 16; j++) {
+        const k = m[i * 16 + j];
+        c[j] ^= PI_SUBST[k ^ l];
+        l = c[j];
+      }
+    }
+    m.set(c, bytes.length + pad);
+
+    const x = new Uint8Array(48);
+    for (let i = 0; i < nBlocks + 1; i++) {
+      for (let j = 0; j < 16; j++) {
+        x[16 + j] = m[i * 16 + j];
+        x[32 + j] = x[16 + j] ^ x[j];
+      }
+      let t = 0;
+      for (let step = 0; step < 18; step++) {
+        for (let k = 0; k < 48; k++) {
+          x[k] ^= PI_SUBST[t];
+          t = x[k];
+        }
+        t = (t + step) & 0xff;
+      }
+    }
+
+    let hex = "";
+    for (let i = 0; i < 16; i++) hex += x[i].toString(16).padStart(2, "0");
+    return hex;
+  }
+
+  async function generarHash() {
+    const fileInput = document.getElementById("fileInput");
+    const textInput = document.getElementById("textInput");
+    const algo = document.getElementById("algoSelect").value;
+    let dataBuffer;
+
+    if (fileInput.files.length > 0) {
+      dataBuffer = new Uint8Array(await fileInput.files[0].arrayBuffer());
+    } else {
+      const text = textInput.value;
+      if (!text) {
+        alert("Por favor sube un archivo o pega el texto para calcular su hash.");
+        return;
+      }
+      dataBuffer = new TextEncoder().encode(text);
+    }
+
+    let hashResult = "";
+    if (algo === "md2") {
+      hashResult = calcMD2(dataBuffer);
+    } else if (algo === "sha256") {
+      const hashBuf = await crypto.subtle.digest("SHA-256", dataBuffer);
+      hashResult = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    document.getElementById("resultLabel").textContent = "RESULTADO (" + algo.toUpperCase() + "):";
+    document.getElementById("hashOutput").textContent = hashResult;
+    document.getElementById("resultBox").style.display = "block";
+  }
+</script>
+</body>
+</html>
